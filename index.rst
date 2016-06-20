@@ -234,11 +234,74 @@ The data products produced by coaddition are:
 ``deepCoadd``
   Original coadds without detection masks and only any background subtraction done on the individual images.  Includes the coadded PSF model.  These are not used by later pipelines, and writing them can be disabled by passing the config option ``assembleCoadd.doWrite=False`` to ``coaddDriver.py``.
 
+``deepCoadd_det``
+  A catalog of detections, done separately on each patch/band combination.  As there is no deblending or measurement of these detections, this catalog is not very useful directly, but it is an important input to the next stage of processing.
+
 
 .. _multiband-coadd-processing:
 
 Multi-Band Coadd Processing
 ===========================
+
+LSST's coadd processing pipeline is designed to produce consistent cross-band catalogs, in terms of both deblending and measurement.  After detecting separately in every band (which is included in :ref:`Coaddition <coaddition>`), there are four steps, each of which is associated with its own command-line task:
+
+ - We merge detections across bands in a patch using :py:class:`lsst.pipe.tasks.MergeCoaddDetectionsTask` (``mergeCoaddDetections.py``).  This produces a single catalog data product, ``deepCoadd_mergeDet``.  Like ``deepCoadd_det``, this catalog isn't useful on its own.
+
+ - We deblend and measure objects independently in every band using :py:class:`lsst.pipe.tasks.MeasureMergedCoaddSourcesTask` (``measureCoaddSources.py``).  This produces the first generally useful coadd catalog, ``deepCoadd_meas``.  Because the objects are defined consistently across all bands, the rows of the per-band ``deepCoadd_meas`` catalogs refers to the same objects, making them easy to compare.
+
+ - We compare measurements across bands, selecting a "reference" band for every object, using :py:class:`lsst.pipe.tasks.MergeMeasurementsTask` (``mergeCoaddMeasurements.py``).  This produces the ``deepCoadd_ref`` catalog (one for all bands), which just copies a row from the ``deepCoadd_meas`` corresponding to each object's reference band, while adding a flag to indicate which band was selected as the reference for that object.
+
+ - We measure again in every band while holding the positions and shapes fixed at the values measured in each object's reference band, using :py:class:`lsst.meas.base.ForcedPhotCoaddTask` (``forcedPhotCoadd.py``).  This produces the ``deepCoadd_forced_src`` dataset, which provides the flux measurements that provide our best estimates of colors.
+
+Because our coads are not PSF-homogenized, the forced coadd fluxes don't produce consistent colors unless some other form of PSF correction is applied.  The PSF fluxes and optional CModel fluxes (see :ref:`Enabling Extension Packages <enabling-extension-packages>`) do provide this correction, while other fluxes do not (and the CModel correction is only approximate; it depends on how well the galaxy's morphology can be approximated by a simple model).
+
+There is no need to run these tasks independently; the `multiBandDriver.py` script (:py:class:`lsst.pipe.drivers.MultiBandDriverTask`) can be used to run them all in the appropriate order:
+
+.. prompt:: bash
+
+  multiBandDriver.py DATA --rerun example2:example3 \
+    --id tract=0 patch=0,0^0,1^0,2^1,0^1,1^1,2^2,0^2,1^2,2 filter=HSC-R^HSC-I \
+    --cores=4
+
+This is a :py:class:`lsst.ctrl.pool.BatchParallelTask`, so all of the more sophisticated parallelization options are available.
+
+
+.. _other-command-line-tasks:
+
+Other Command-Line Tasks
+========================
+
+The LSST includes a few more pipelines that aren't covered in detail here.  None of these are :py:class:`lsst.ctrl.pool.BatchParallelTask`\s, so they don't support sophisticated parallelization.  The most important ones are:
+
+ - Calibration product production, using the ``construct[Bias,Dark,Flat,Fringe].py`` scripts.  These have only been rigorously tested on HSC data, and may not be usable for other cameras yet.
+
+ - Forced photometry on exposure images with the coadd reference catalog, using ``forcedPhotCcd.py`` (:py:class:`lsst.meas.base.ForcedPhotCcdTask`).  This works, but we don't have a way to deblend sources in this mode of processing yet, so the results are suspect for blended objects.
+
+ - Difference imaging and transient source detection and characterization, using ``imageDifference.py`` (:py:class:`lsst.meas.base.ImageDifferenceTask`).  This has been run quite successfully on several datasets by experts, but may require some configuration-tuning to get high-quality results in general.
+
+
+.. _enabling-extension-packages:
+
+Enabling Extension Packages
+===========================
+
+Some of the most useful measurement algorithms are included in the LSST stack as optional extension packages, and may not be enabled by default for a particular *obs* package (and even if they are, a `EUPS` product may need to be explicitly setup).
+
+These include:
+
+ - Kron photometry, in the `meas_extensions_photometryKron`_ package.
+ - Weak-lensing using the HSM algorithms, in the `meas_extensions_shapeHSM`_ package.
+ - CModel galaxy photometry, in the `meas_modelfit`_ package.
+
+With the exception of CModel, simply setting up these `EUPS`_ products will enable them when processing HSC data (and CModel will be enabled in this way very soon).  For other *obs* packages, we recommend inspecting the ``config`` directory of the `obs_subaru`_ to find configuration files that can be used to enable these extensions (such a file exists for CModel as well, even though it isn't used by default).
+
+Note that photometry extension algorithms should be enabled in both exposure processing and coadd processing, even if coadd fluxes are the only ones of interest; we need to run the algorithms on individual exposures to calculate their aperture corrections, which are then coadded along with the PSFs to calculate coadd-level aperture corrections.
+
+.. _meas_extensions_photometryKron: https://github.com/lsst/meas_extensions_photometryKron
+
+.. _meas_extensions_shapeHSM: https://github.com/lsst/meas_extensions_shapeHSM
+
+.. _meas_modelfit: https://github.com/lsst/meas_modelfit
 
 
 .. _using-the-butler:
