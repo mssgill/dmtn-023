@@ -309,14 +309,56 @@ Note that photometry extension algorithms should be enabled in both exposure pro
 Using the Butler
 ================
 
+Data products produced by the pipelines described above are best accessed using the butler.  Creating a butler in Python is easy; just pass the rerun directory to the :py:class:`lsst.daf.persistence.Butler` constructor:
+
+::
+
+  from lsst.daf.persistence import Butler
+  butler = Butler("DATA/rerun/example3")
+
+We can then use the ``get`` method to extract any of the data products we've produced; for example:
+
+::
+
+  calexp = butler.get("calexp", visit=903334, ccd=16, immediate=True)
+  src = butler.get("src", visit=903334, ccd=16, immediate=True)
+  coadd = butler.get("deepCoadd_calexp", tract=0, patch="1,1", filter="HSC-I", immediate=True)
+  meas = butler.get("deepCoadd_meas", tract=0, patch="1,1", filter="HSC-I", immediate=True)
+
+Even though some of these are in the "example1" or "example2" rerun, we can access them all through a single butler initialized to the "example3" root.
+
+We've passed ``immediate=True`` to all of these to tell the butler to read and return objects immediately; if we don't, it'll return a lazy-I/O proxy that mostly behaves like the object it points, but can occasionally be a little confusing (especially in terms of introspection).
+
+We can also use the butler to get the filename of a data product by appending "_filename" to the data product name, in case we actually do need to manipulate the filesystem directly:
+
+::
+
+  filename = butler.get("deepCoadd_tempExp_filename", visit=903334, tract=0,patch="1,1")[0]
+
+Note that getting a ``*_filename`` data product actually returns a single-element list (in the future, some data products may be split across multiple files, though none currently are).
+
 
 .. _frequently-encountered-problems:
 
 Frequently Encountered Problems
 ===============================
 
+.. _configuration-and-software-version-changes:
+
 Configuration and Software Version Changes
 ------------------------------------------
 
+The first time a commmand-line task is run in a chain of data repositories, the versions of all of the software it uses and the full configuration tree are saved to the output repositories.  The next time that task is run, the versions and configuration are compared against the saved versions, and the task will fail if they're not the same.  This is usually desirable in production environments, where it's important that all data units be processed the same way (though it would be desirable to make the comparison only happen within one rerun, not a full rerun chain -- but this is not yet implemented).
+
+In testing work, this behavior is frequently inconvenient, and the pipeline provides options to override it: ``--clobber-config`` and ``--clobber-versions`` will simply overwite the existing configuration or version information (respectively), and ``--no-versions`` will prevent version information from being written or tested entirely.
+
+These tests can also be dangrous in parallel execution, as they can be subject to race conditions (because one process can be testing for the existing of the file while another is writing it).  The built-in parallelization provided by the various :py:class:`lsst.ctrl.pool.BatchParallelTask` options and ``-j`` are safe in this respect; these do the writing and comparisons in a single process before starting the parallel processing.  External wrappers that run the same task in multiple processes may not be safe, especially if the ``--clobber-*`` operations are being used; the default behavior is protected from race conditions by using filesystem operations that are atomic on most filesystems, but the ``--clobber-*`` operations are not.
+
+.. _clobbering-and-skiping:
+
 Clobbering and Skipping Outputs
 -------------------------------
+
+Some command-line tasks (especially the ``*Driver.py`` tasks) test whether a data product exists in the current rerun *chain*, and skip any processing that would be replace it.  This is exactly the behavior desired when a large job dies unexpected and you want to resume it.  But it can be very confusing when you actually want to re-do the processing (especially the fact that processing is skipped if the output data product appears anywhere in the rerun *chain*, not just the last rerun in the chain).
+
+Tasks with this behavior have configuration parameters to disable it, usually with names with words like "overwrite", "clobber", or "skip".  Because these are configuration parameters (not normal command-line options), changing them and then restarting processing in the same rerun will trigger an error of the type described in the :ref:`previous section <configuration-and-software-version-changes>`.
