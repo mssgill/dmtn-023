@@ -6,7 +6,7 @@ Introduction
 
 This document provides a brief tutorial for using the LSST Pipeline's main command-line drivers.  These form a sequence of high-level operations that can be used to process data from raw images to multi-band catalogs derived from coadds.  The pipeline is currently very much at a prototype stage; the final LSST pipelines will be significantly more complex, and there will be no need to manually execute several steps in order to run it.  Even in its current form, the pipeline is quite sophisticated; it is already being used as the official pipeline of the Hyper Suprime-Cam (HSC) survey on Subaru.
 
-Using these pipelines requires an *obs* package that has been specialized for the instrument that produced the data.  These packages provide information about camera geometry, detrending, filters, file formats and directory structure, and everything else that makes a camera unique.  Working ``obs`` packages already exist for HSC and Suprime-Cam (`obs_subaru`_), SDSS (`obs_sdss`_), CFHT's Megacam (`obs_cfht`_), CTIO's DECam (`obs_decam`_), and LSST simulations (`obs_lsstSim`_).  Creating a new *obs* package is a fair amount of work, and it's well beyond the scope of this tutorial.  We'll be using `obs_subaru`_ in this tutorial, as it's the most rigorously tested of the *obs* packages, and we'll specifically refer to data that is available in the `ci_hsc`_ package, though the same commands (with different image IDs) should work on any dataset.
+Using these pipelines requires an *obs* package that has been specialized for the instrument that produced the data.  These packages provide information about camera geometry, detrending, filters, file formats and directory structure, and everything else that makes a camera unique.  Working ``obs`` packages already exist for HSC and Suprime-Cam (`obs_subaru`_), SDSS (`obs_sdss`_), CFHT's Megacam (`obs_cfht`_), CTIO's DECam (`obs_decam`_), and LSST simulations (`obs_lsstSim`_).  Creating a new *obs* package is a fair amount of work, and it's well beyond the scope of this tutorial.  We'll be using `obs_subaru`_ in this tutorial, as it's currently the most rigorously tested of the *obs* packages, and we'll specifically refer to data that is available in the `ci_hsc`_ package, though the same commands (with different image IDs) should work on any dataset.
 
 .. _obs_subaru: https://github.com/lsst/obs_subaru
 
@@ -20,31 +20,64 @@ Using these pipelines requires an *obs* package that has been specialized for th
 
 .. _ci_hsc: https://github.com/lsst/ci_hsc
 
-We will assume that the raw data and calibration frames (e.g. flats) are already present, as they are in `ci_hsc`_'s DATA directory.  It may be necessary to create a symbolic link to the ``CALIB`` directory in the ``DATA`` directory, if it does not already exist:
+This document is intended to be read as a tutorial, not a reference -- some features relevant to all command-line scripts are described in only one of the sections below, as it's intended that the reader will be going through all of them.
+
+
+.. _data-repository-setup:
+
+Data Repository Setup
+=====================
+
+We will assume that the raw data and calibration frames (e.g. flats) are both already available.  Most *obs* packages provide a way to build master calibration frames, but those haven't yet been standardized, and `ci_hsc`_ already includes everything we'll need for later processing.  We'll assume the location of `ci_hsc`_ is in the environment variable ``$CI_HSC_DIR``.
+
+We'll start by creating a ``DATA`` directory, which will be the root of what we call a *data repository*:
+
+.. prompt:: bash
+
+  mkdir DATA
+
+The files within this directory will be managed by an object called the *butler* (:py:class:`lsst.daf.persistence.Butler`), which abstracts all of our I/O; under normal circumstances, files and directories in a data repository should only be accessed or modified using the butler.  The structure of the data repository is defined by another class called a *mapper*.  Most mappers are defined in an ``obs`` package, which lets us use the native organizational for each instrument (at least for raw data).  To tell the butler which mapper a data repository uses, we create a ``_mapper`` file in the root of the data repository:
+
+.. prompt:: bash
+
+  echo "lsst.obs.hsc.HscMapper" > DATA/_mapper
+
+We can then *ingest* the raw images into the data repository, using the ``ingestImages.py`` script (implmented in :py:class:`lsst.pipe.tasks.IngestImagesTask`):
+
+.. prompt:: bash
+
+  ingestImages.py DATA $CI_HSC_DIR/raw/*.fits --mode=link
+
+This adds symlinks for every file in the raw directory to the appropriate (butler-managed) location in the DATA directory; you can also use other ``--mode`` options to move, copy, or do nothing (if the files are already in the right place).  In addition, this creates a *registry*: a database of all the raw images in the repository.
+
+Calibration frames are typically stored in a separate data repository, and `ci_hsc`_ already contains a complete one.  We could just use this as-is, by passing ``--calib=$CI_HSC_DIR/CALIB`` to all of the downstream pipelines, but it will be easier to just create a symlink from this directory into our data repository:
 
 .. prompt:: bash
 
   cd DATA
-  ln -s ../CALIB .
-
-The the ``DATA`` directory is the root of what we call a *data repository*.  The files within it are managed by an object called the *butler* (:py:class:`lsst.daf.persistence.Butler`), which abstracts all of our I/O; under normal circumstances, files and directories in a data repository should only be accessed or modified using the butler.  The structure of the data repository is defined by another class called a *mapper*.  Most mappers are defined in an ``obs`` package, which lets us use the native organizational for each instrument (at least for raw data).
-
-When we run pipelines, the outputs will go into a new data repository we call a *rerun*.  By default, reruns are created in a ``rerun/<rerun-name>`` subdirectory of the original data repository.  Reruns can be chained -- a rerun from an early stage of processing may be used as the input data repository for another stage.
-
-Some of our processing steps require an external reference catalog, which is currently provided by an ``astrometry_net_data`` package that must be set up using EUPS.  `ci_hsc`_ includes such a package.  Before first use, it must be declared:
 
 .. prompt:: bash
 
-  declare -r sdss-dr9-fink-v5b astrometry_net_data sdss-dr9-fink-v5b+ci_hsc
+  ln -s $CI_HSC_DIR/CALIB .
 
-and then (like any EUPS product) it must set up every time you open a new shell:
+This location will automatically searched by pipelines when looking for calibration data.  You can ignore all of the warnings you may see in the logs about failures to find calibration registries in other locations.
+
+Some of our processing steps require an external reference catalog, which is currently provided by an ``astrometry_net_data`` package that must be set up using `EUPS`_ (the same system used to set up and declare LSST software versions).  `ci_hsc`_ includes such a package.  Before first use, it must be declared:
+
+.. prompt:: bash
+
+  eups declare -r sdss-dr9-fink-v5b astrometry_net_data \
+    $CI_HSC_DIR/sdss-dr9-fink-v5b+ci_hsc
+
+and then (like any `EUPS`_ product) it must set up every time you open a new shell:
 
 .. prompt:: bash
 
   setup astrometry_net_data sdss-dr9-fink-v5b+ci_hsc
 
-This document is intended to be read as a tutorial, not a reference -- some features relevant to all command-line scripts are described in only one of the sections below, as it's intended that the reader will be going through all of them.
+When we run pipelines, the outputs will go into a new data repository we call a *rerun*.  By default, reruns are created in a ``rerun/<rerun-name>`` subdirectory of the original data repository.  Reruns can be chained -- a rerun from an early stage of processing may be used as the input data repository for another stage.
 
+.. _EUPS: https://developer.lsst.io/build-ci/eups_tutorial.html
 
 .. _exposure-processing:
 
@@ -156,7 +189,6 @@ Now that we've defined the skymap (formally the ``deepCoadd_skyMap`` data produc
     --selectId visit=903334..903338:2 --selectId visit=903342..903346:2 \
     --id tract=0 patch=1,1 filter=HSC-R --cores=4
 
-
 .. prompt:: bash
 
   coaddDriver.py DATA --rerun example2 \
@@ -223,5 +255,5 @@ Frequently Encountered Problems
 Configuration and Software Version Changes
 ------------------------------------------
 
-Clobbering and Skipping
------------------------
+Clobbering and Skipping Outputs
+-------------------------------
