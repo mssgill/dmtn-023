@@ -66,8 +66,8 @@ Some of our processing steps require an external reference catalog, which is cur
 
 .. prompt:: bash
 
-  eups declare -r sdss-dr9-fink-v5b astrometry_net_data \
-    $CI_HSC_DIR/sdss-dr9-fink-v5b+ci_hsc
+  eups declare astrometry_net_data sdss-dr9-fink-v5b+ci_hsc \
+    -m none -r $CI_HSC_DIR/sdss-dr9-fink-v5b
 
 and then (like any `EUPS`_ product) it must set up every time you open a new shell:
 
@@ -253,17 +253,25 @@ LSST's coadd processing pipeline is designed to produce consistent cross-band ca
 
  - We measure again in every band while holding the positions and shapes fixed at the values measured in each object's reference band, using :py:class:`lsst.meas.base.ForcedPhotCoaddTask` (``forcedPhotCoadd.py``).  This produces the ``deepCoadd_forced_src`` dataset, which provides the flux measurements that provide our best estimates of colors.
 
-Because our coadds are not PSF-homogenized, the forced coadd fluxes don't produce consistent colors unless some other form of PSF correction is applied.  The PSF fluxes and optional CModel fluxes (see :ref:`Enabling Extension Packages <enabling-extension-packages>`) do provide this correction, while other fluxes do not (and the CModel correction is only approximate; it depends on how well the galaxy's morphology can be approximated by a simple model).
+Because our coadds are not PSF-homogenized, the forced coadd fluxes don't produce consistent colors unless some other form of PSF correction is applied.  The PSF
+In production settings, we use an external catalog of bright stars to set some masks when building coadds, an fluxes and optional CModel fluxes (see :ref:`Enabling Extension Packages <enabling-extension-packages>`) do provide this correction, while other fluxes do not (and the CModel correction is only approximate; it depends on how well the galaxy's morphology can be approximated by a simple model).
 
-There is no need to run these tasks independently; the `multiBandDriver.py` script (:py:class:`lsst.pipe.drivers.MultiBandDriverTask`) can be used to run them all in the appropriate order:
+There is no need to run these tasks independently; the `multiBandDriver.py` script (:py:class:`lsst.pipe.drivers.MultiBandDriverTask`) can be used to run them all in the appropriate order.  This is a :py:class:`lsst.ctrl.pool.BatchParallelTask`, so all of the more sophisticated parallelization options are available.  Before we we run it, however, we'll have to create a small configuration file.
+
+In production settings, we use an external catalog of bright stars to set some masks when building coadds, and when we measure, we use those masks to set flags on the objects.  Since we haven't used that external catalog here, we need to turn off the flag-setting, and that's a bit more complex than we can do on the command line.  Here is the content of the file; save it as ``no-bright-object-mask.py``:
+
+::
+
+  config.measureCoaddSources.measurement.plugins["base_PixelFlags"].masksFpCenter.remove("BRIGHT_OBJECT")
+  config.measureCoaddSources.measurement.plugins["base_PixelFlags"].masksFpAnywhere.remove("BRIGHT_OBJECT")
 
 .. prompt:: bash
 
   multiBandDriver.py DATA --rerun example2:example3 \
-    --id tract=0 patch=0,0^0,1^0,2^1,0^1,1^1,2^2,0^2,1^2,2 filter=HSC-R^HSC-I \
-    --cores=4
+    --id tract=0 patch=1^1 filter=HSC-R^HSC-I \
+    --cores=2 -C no-bright-object-mask.py
 
-This is a :py:class:`lsst.ctrl.pool.BatchParallelTask`, so all of the more sophisticated parallelization options are available.
+We've run only the middle patch here.  Because there's so little data here, the outer patches have a lot of area with no valid pixels, and coadd processing will fail if there is too much missing area (unless you set some other configuration options we won't go into here).  You'll also see a lot of warnings about failed measurements even on the middle patch for the same reason.  Because we're only running one patch, we're also only using two cores, as that's the most the script will be able to make use of (because there are two filters).
 
 
 .. _other-command-line-tasks:
@@ -273,7 +281,7 @@ Other Command-Line Tasks
 
 The LSST includes a few more pipelines that aren't covered in detail here.  None of these are :py:class:`lsst.ctrl.pool.BatchParallelTask`\s, so they don't support sophisticated parallelization.  The most important ones are:
 
- - Calibration product production, using the ``construct[Bias,Dark,Flat,Fringe].py`` scripts.  These have only been rigorously tested on HSC data, and may not be usable for other cameras yet.
+ - Calibration product production, using the ``construct[Bias,Dark,Flat,Fringe].py`` scripts.  These have only been rigorously tested on HSC data, but they should work on most other cameras as well.
 
  - Forced photometry on exposure images with the coadd reference catalog, using ``forcedPhotCcd.py`` (:py:class:`lsst.meas.base.ForcedPhotCcdTask`).  This works, but we don't have a way to deblend sources in this mode of processing yet, so the results are suspect for blended objects.
 
