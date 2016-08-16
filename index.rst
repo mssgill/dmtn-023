@@ -50,7 +50,7 @@ We can then *ingest* the raw images into the data repository, using the ``ingest
 
 This adds symlinks for every file in the raw directory to the appropriate (butler-managed) location in the DATA directory; you can also use other ``--mode`` options to move, copy, or do nothing (if the files are already in the right place).  In addition, this creates a *registry:* a database of all the raw images in the repository.
 
-Calibration frames are typically stored in a separate data repository, and `ci_hsc`_ already contains a complete one.  We could just use this as-is, by passing ``--calib=$CI_HSC_DIR/CALIB`` to all of the downstream pipelines, but it will be easier to just create a symlink from this directory into our data repository:
+Calibration frames are typically stored in a separate data repository, and `ci_hsc`_ already contains a complete one.  We could just use this as-is, by passing ``--calib=$CI_HSC_DIR/CALIB`` to all of the downstream pipelines, but it will be easier to just  create a symlink from our DATA directory into the CALIB repository:
 
 .. prompt:: bash
 
